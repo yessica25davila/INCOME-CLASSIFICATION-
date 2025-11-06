@@ -1,0 +1,477 @@
+---
+title: "Final Progress Report"
+author: "Yessica Rubio"
+output: pdf_document
+---
+```{r}
+library(tidyverse)
+library(openintro) # contains email data
+library(ggplot2)  #access ggplot
+library(vcdExtra)
+library(magrittr)
+library(MASS)
+library(lme4)     # access the mixed functions
+library(VGAM)     # contains crash data
+library(tree)     # for classification trees
+library(pROC)     # ROC curves   
+library(boot)     # contains the cv.glm function
+library(car)      # check for multicollinearity
+```
+
+
+
+# DATA DESCRIPTION
+
+I chose the census income data from the UCI machine learning repository. It 
+contains 32,561 observations on 15 variables, which include "age", "workclass",
+"final-weight","education","education-num","marital-status","occupation",
+"relationship","race","sex","capital-gain","capital-loss","hours-per-week",
+"native-country",and "earnings". 
+
+The data was contained by following the conditions for people over the age of
+16 and having worked at least one hour. 
+
+The data is clean from unknown values as they were removed to successfully 
+predict or determine whether a person makes over 50K a year. 
+
+
+
+# RESPONSE AND METHODS USED TO ANSWER QUESTIONS OF INTEREST
+
+I'll be using the earnings variable as the response variable in the case whether
+or not a person makes more than 50K. 
+
+My method includes fitting a model to answer the question of interest. I plan
+on using a binomial logistic regression to attempt to predict whether a person
+falls into one of the two categories for earnings, whether a person makes more 
+than 50K or not. 
+
+I will look at some exploratory plots to look at different relationships
+between the explanatory variables to then fit my model. 
+
+After looking at the summary of my model I will check for over dispersion
+and account for that over dispersion with a negative binomial model.
+
+
+      
+# EXPLORATORY ANALYSIS
+
+```{r}
+# Load and look at the data. srip.white gets rid of any whitespace in the data, for example in V15 " >50K" will be converted to ">50K"
+AdultData <- read.csv('adult.data', strip.white = TRUE, header=FALSE)
+head(AdultData)
+AdultData2 <- AdultData
+```
+
+
+```{r}
+
+# Create new column that will take value 1 if earnings greater than 50k and 0 otherwise. This will be the response variable
+AdultData2 %<>% mutate(.,V16 = ifelse((V15 == ">50K"),1,0))
+head(AdultData2)
+
+# Change the names of the columns
+colnames(AdultData2) <- c("age", "workclass", "final-weight","education","education-num","marital-status","occupation","relationship","race","sex","capital-gain","capital-loss","hours-per-week","native-country","earnings", "earnings50K")
+head(AdultData2)
+
+# Here I will clean up the data some more and state the variables as factors that need to be factors.
+AdultData2[AdultData2 == "?"] <- NA
+
+
+AdultData2$workclass <- as.factor(AdultData2$workclass)
+AdultData2$education <- as.factor(AdultData2$education)
+AdultData2$`marital-status` <- as.factor(AdultData2$`marital-status`)
+AdultData2$relationship <- as.factor(AdultData2$relationship)
+AdultData2$race <- as.factor(AdultData2$race)
+AdultData2$sex <- as.factor(AdultData2$sex)
+AdultData2$`native-country` <- as.factor(AdultData2$`native-country`)
+AdultData2$earnings <- as.factor(AdultData2$earnings)
+AdultData2$occupation <- as.factor(AdultData2$occupation)
+
+```
+
+```{r}
+# After all the data cleaning and data manipulation check the summary and structure of the data
+str(AdultData2)
+summary(AdultData2)
+```
+
+
+```{r}
+# Are there any NA values?
+nrow(AdultData2[is.na(AdultData2$education) | is.na(AdultData2$age) | is.na(AdultData2$occupation),])
+```
+
+
+```{r}
+# Number of observations before removing NAs
+nrow(AdultData2)
+
+# Remove the NAs
+AdultData2 <- AdultData2[!(is.na(AdultData2$education) | is.na(AdultData2$age) | is.na(AdultData2$occupation)),]
+
+# Number of observations after removing NAs
+nrow(AdultData2)
+```
+
+
+
+```{r}
+# Make Exploratory Data Analysis (EDA) with ggplot2 to then fit a model
+# These plots are AFTER removing the NAs
+
+
+# USE jitter for the same plots above to see more of the observations without
+# the overlapping
+ggplot(data = AdultData2) + 
+  geom_jitter(aes(x = age, y = earnings, color = sex)) + 
+  ggtitle("Earnings vs Age") +
+  labs(
+    x = "Age",         # X-axis title
+    y = "Earnings (in dollars)"       # Y-axis title
+  )
+
+ggplot(data = AdultData2) + 
+  geom_jitter(aes(x = `hours-per-week`, y = earnings, color = sex))+ 
+  ggtitle("Earnings vs Hours Worked per Week") +
+  labs(
+    x = "Hours per Week",         # X-axis title
+    y = "Earnings (in dollars)"       # Y-axis title
+  )
+
+
+ggplot(data = AdultData2) + 
+  geom_jitter(aes(x = `education-num`, y = earnings, color = sex))+ 
+  ggtitle("Earnings vs Education Level") +
+  labs(
+    x = "Education Level",         # X-axis title
+    y = "Earnings (in dollars)"       # Y-axis title
+  )
+
+```
+
+Some observation include a visible concentration around 40 hours worked per week among both genders and a possible trend where individuals with more years of education could be more likely to make more than \$50,000. We also see that the majority of individuals who earn more than \$50,000 are male across all ages. Overall, we notice the majority of individuals fall in the category that make \$50,000 or less. 
+
+      ---------------------------------------
+
+# QUESTION 1
+
+
+Is there an association between earnings over 50K and hours worked per week, 
+after accounting for other factors (sex, age, education)?
+      
+      I could fit two models to see if there is an association between
+      earnings and hours worked per week. The first will be a rich model
+      without the hours worked per week variable then refit the model
+      adding the hours worked per week variable. 
+      QUESTION 1
+
+2. Multicollinearity (variance inflation factor)
+VIF > 5 or 10 suggests multicollinearity      
+```{r}
+# model without hours per week
+richMod1 <- glm(earnings50K ~ sex + age + education + workclass + `final-weight` + 
+                  `marital-status` + occupation + relationship  + race + `capital-gain` +
+                  `capital-loss` + `native-country`, data = AdultData2, 
+                family = binomial)
+# ALL VARIABLES IN THE MODEL + hours-per-week
+richMod11 <- glm(earnings50K ~ sex + age + education + workclass + `final-weight` + 
+                  `marital-status` + occupation + relationship + race + `capital-gain` +
+                  `capital-loss` + `native-country` + `hours-per-week`, data = AdultData2, 
+                family = binomial)
+vif(richMod1)
+vif(richMod11)
+```      
+      
+```{r}
+# ALL VARIABLES IN THE MODEL excluding hours per week
+richMod1 <- glm(earnings50K ~ sex + age + education + workclass + `final-weight` + 
+                  `marital-status` + occupation + race + `capital-gain` +
+                  `capital-loss` + `native-country` , data = AdultData2, 
+                family = binomial)
+summary(richMod1)
+```
+      
+```{r}
+# ALL VARIABLES IN THE MODEL + hours-per-week
+richMod11 <- glm(earnings50K ~ sex + age + education + workclass + `final-weight` + 
+                  `marital-status` + occupation + race + `capital-gain` +
+                  `capital-loss` + `native-country` + `hours-per-week`, data = AdultData2, 
+                family = binomial)
+summary(richMod11)
+```      
+
+That's a pretty strong effect! r =  p-value < 0.001. 
+Recall: The coefficient in the output is log-odds
+
+
+```{r}
+# Convert for odds ratio
+exp(0.02949)
+# Confidence interval
+exp(0.02949+c(-1,1)*1.96*0.001702)
+```
+
+```{r}
+# compare models with drop in deviance
+anova(richMod1,richMod11,test="Chisq")
+```     
+     
+```{r}
+# compare with the other models with likelihood
+LRstats(richMod1,richMod11)
+```
+     
+      
+
+```{r}
+# fit a rich model without the hours per week variable AFTER removing NAs
+# check for over dispersion:sex, age, workclass, education, occupation,and race)?
+# no over dispersion! yay
+#richMod <- glm(earnings50K ~ sex + age + education,
+ #              data = AdultData2, family = binomial)
+#summary(richMod)
+```
+
+
+```{r}
+# fit a rich model with the hours per week variable AFTER removing NAs
+# check for over dispersion:sex, age, workclass, education, occupation,and race)?
+#hrsMod <- glm(earnings50K ~ sex + age +  education + 
+ #                 `hours-per-week`,data = AdultData2, family = binomial)
+#summary(hrsMod)
+```
+
+```{r}
+#observe the coefficients
+#coef(summary(richMod))
+
+#coef(summary(hrsMod))
+```
+
+That's a pretty strong effect! r =  p-value < 0.001. 
+
+```{r}
+#exp(0.0337)
+#exp(0.0337+c(-1,1)*1.96*0.0014)
+```
+
+# MODEL COMPARISON
+
+Adding hours-per-week to the model significantly improves model fit.
+
+The p-value (< 2.2e-16) means that the reduction in deviance (643.36) is not due to random chance.
+
+Therefore, hours-per-week is a strong predictor of whether someone earns >50K or not after controlling for sex, age, and education.
+
+```{r}
+#anova(richMod,hrsMod,test="Chisq")
+```
+     
+      ---------------------------------------
+
+# QUESTION 2
+After accounting for age, is there evidence of a difference in 
+the earnings probability of men and women?
+
+      Since we will be concerned only with how `age`, and `sex` 
+      explain whether someone makes more or less than 50K a year, we will drop 
+      the other variables.
+
+
+      QUESTION #2
+
+```{r}
+#Since we will be concerned only with how `age`,`education`, and `sex` 
+#      explain whether someone makes more or less than 50K a year, we will drop 
+ #     the other variables.
+AdultData3 <- AdultData2
+AdultData3 %<>% dplyr::select(.,sex, age, earnings, earnings50K)
+head(AdultData3)
+```
+
+```{r}
+# Where >50K = 1 and <=50K = 0
+(tbl1 <- xtabs(data = AdultData3, ~ sex + earnings50K))
+
+```
+
+```{r}
+#And see the proportions surviving in each `sex`
+
+prop.table(tbl1, margin = 1) %>% round(2)
+#Out of the 9,930 females 89% make 50K or less and 11% make more than 50K a year.
+#Out of the 20,788 males 69% make 50K or less and 31% make more than 50K a year.
+```
+
+
+
+```{r}
+(male_odds <- 31/69)
+(female_odds <- 11/89)
+```
+
+
+```{r}
+#And the odds ratiosex:
+
+(mf_odds_ratio <- male_odds/female_odds)
+#Ignoring age, the odds of earning >50K for males is 363%% of the odds of earning 
+#over 50K for females. This sounds like a large probability. There may be 
+#evidence of a difference in earning probability of men and women.
+```
+
+
+```{r}
+glm_int <- glm(earnings50K ~ sex * age, family = binomial, data = AdultData3)
+summary(glm_int)
+
+# Looks like the interaction term between sexMale and age is significant. Will
+# also refit without interaction terms
+
+glm2 <- glm(earnings50K ~ sex + age, family = binomial, data = AdultData3)
+summary(glm2)
+```
+
+
+```{r}
+vif(glm_int)
+vif(glm2)
+```
+
+```{r}
+# compare models with drop in deviance
+anova(glm2,glm_int,test="Chisq")
+```     
+     
+```{r}
+# compare with the other models with likelihood
+LRstats(glm2,glm_int)
+```
+
+```{r}
+logistic <- function(x){exp(x)/(1 + exp(x))}
+
+# Obtain 95% pointwise confidence bands from predict.glm()
+glm_pred <- predict.glm(glm_int, se.fit=TRUE)
+low <- glm_pred$fit - 1.96 * glm_pred$se.fit
+upp <- glm_pred$fit + 1.96 * glm_pred$se.fit
+
+# back-transform everything to the data scale
+glm_fit <- logistic(glm_pred$fit)
+glm_lower <- logistic(low)
+glm_upper <- logistic(upp)
+
+# augment  data frame
+augment_Adult <- as.data.frame(cbind(AdultData3, glm_fit, glm_lower, glm_upper))
+
+
+#ggplot(data = augment_Adult) + 
+  # plot jittered data
+ # geom_jitter(aes(x = age, 
+  #               y = earnings50K,
+   #              color = sex),
+    #             height = 0.05, width = 0.2) + 
+  
+  # plot loess smoother
+  #geom_smooth(aes(x = age, 
+   #             y = earnings50K,
+    #             color = sex)) + 
+  
+#facet_grid(.~sex) + 
+ # ggtitle("Predicted Probability of Earning >50K by Age and Sex")+
+  #labs(
+   # x = "Age",         # X-axis title
+    #y = "Probability of Earning > $50K"       # Y-axis title
+#  )
+```
+
+```{r}
+ggplot(augment_Adult, aes(x = age, y = glm_fit, color = sex)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = glm_lower, ymax = glm_upper, fill = sex), alpha = 0.2, color = NA) +
+  ggtitle("Predicted Probability of Earning >50K by Age and Sex")+
+  labs(
+    x = "Age",         # X-axis title
+    y = "Probability of Earning > $50K"       # Y-axis title
+  )
+```
+
+
+```{r}
+summary(glm_int)
+summary(glm2)
+
+```
+
+```{r}
+# exponentiage the log odds of sexMale:age
+exp(0.016739)#this will calculate the odds ratio
+exp(confint(glm_int))#obtain confidence interval estimate of multiplicative difference in odds
+
+# exponentiage the log odds of sexMale:age
+exp(1.255950)#this will calculate the odds ratio
+exp(confint(glm2))#obtain confidence interval estimate of multiplicative difference in odds
+
+```
+
+```{r}
+#You can also use the logistic back-transformation to make a comparison in 
+#terms of the probability of earnings >50K:
+logistic(0.016739)
+ci <- confint(glm_int)
+logistic(ci)
+
+logistic(1.255950)
+ci <- confint(glm2)
+logistic(ci)
+
+#The probability of earning over 50k for a male is estimated to be 0.50 higher than that of a female, when comparing two individuals of the same age. A 95% confidence interval for this (additive) difference runs from 0.10 to 0.43.
+```
+
+
+# CHECK ASSUMPTIONS
+
+## 1. Linearity of the logit (for age)
+```{r}
+# Add predicted logit values to dataset
+AdultData3$logit <- predict(glm_int, type = "link")
+
+# Plot logit vs age to visually assess linearity
+library(ggplot2)
+ggplot(AdultData3, aes(x = age, y = logit)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "loess", se = FALSE, color = "blue") +
+  labs(title = "Linearity of Logit with Age", x = "Age", y = "Logit (Predicted)")
+
+```
+
+```{r}
+#For a formal test (Box-Tidwell), your age variable must be positive:
+AdultData3$log_age <- log(AdultData3$age)
+library(car)
+boxTidwell(earnings50K ~ age, ~ log_age, data = AdultData3)
+```
+
+
+## 2. Multicollinearity (variance inflation factor)
+VIF > 5 or 10 suggests multicollinearity (not likely with just sex, age, and their interaction, but worth checking).
+
+```{r}
+library(car)
+vif(glm_int)
+vif(glm2)
+```
+
+## 3. Goodness of fit (hosmer-lemeshow test)
+
+A p-value > 0.05 suggests the model fits the data well.
+
+```{r}
+library(ResourceSelection)
+
+# Ensure earnings50K is binary (0/1)
+hoslem.test(AdultData3$earnings50K, fitted(glm_int))
+```
+
+The probability of earning more than 50K a year for a male is estimated to be 0.64 higher than that of a female when we compare a male and a female of the same age. A 95% confidence interval for this (additive) difference runs from 0.58 to 0.68. 
